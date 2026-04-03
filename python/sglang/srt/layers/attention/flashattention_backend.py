@@ -26,18 +26,6 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.model_runner import ModelRunner
 
 from sgl_kernel import merge_state_v2
-from sgl_kernel.flash_attn import flash_attn_varlen_func as flash_attn_varlen_func_fa3
-from sgl_kernel.flash_attn import flash_attn_with_kvcache as flash_attn_with_kvcache_fa3
-
-flash_attn_varlen_func = flash_attn_varlen_func_fa3
-flash_attn_with_kvcache = flash_attn_with_kvcache_fa3
-
-from sglang.jit_kernel.flash_attention_v4 import (
-    flash_attn_varlen_func as flash_attn_varlen_func_fa4,
-)
-from sglang.jit_kernel.flash_attention_v4 import (
-    flash_attn_with_kvcache as flash_attn_with_kvcache_fa4,
-)
 
 
 @dataclass
@@ -372,6 +360,27 @@ class FlashAttentionBackend(AttentionBackend):
         self.speculative_step_id = speculative_step_id
 
         self.fa_impl_ver = fa_impl_ver
+
+        if self.fa_impl_ver == 4:
+            from sglang.jit_kernel.flash_attention_v4 import (
+                flash_attn_varlen_func as flash_attn_varlen_func_fa4,
+            )
+            from sglang.jit_kernel.flash_attention_v4 import (
+                flash_attn_with_kvcache as flash_attn_with_kvcache_fa4,
+            )
+
+            self.flash_attn_varlen_func = flash_attn_varlen_func_fa4
+            self.flash_attn_with_kvcache = flash_attn_with_kvcache_fa4
+        else:
+            from sgl_kernel.flash_attn import (
+                flash_attn_varlen_func as flash_attn_varlen_func_fa3,
+            )
+            from sgl_kernel.flash_attn import (
+                flash_attn_with_kvcache as flash_attn_with_kvcache_fa3,
+            )
+
+            self.flash_attn_varlen_func = flash_attn_varlen_func_fa3
+            self.flash_attn_with_kvcache = flash_attn_with_kvcache_fa3
 
         # Local attention settings
         self.has_local_attention = model_runner.model_config.is_local_attention_model
@@ -830,19 +839,8 @@ class FlashAttentionBackend(AttentionBackend):
             and not is_swa_layer
         )
 
-        flash_attn_varlen_func_base = flash_attn_varlen_func_fa3
-        flash_attn_with_kvcache_base = flash_attn_with_kvcache_fa3
-
-        flash_attn_varlen_func = (
-            flash_attn_varlen_func_fa4
-            if self.fa_impl_ver == 4
-            else flash_attn_varlen_func_base
-        )
-        flash_attn_with_kvcache = (
-            flash_attn_with_kvcache_fa4
-            if self.fa_impl_ver == 4
-            else flash_attn_with_kvcache_base
-        )
+        flash_attn_varlen_func = self.flash_attn_varlen_func
+        flash_attn_with_kvcache = self.flash_attn_with_kvcache
 
         kwargs = {}
         if sinks is not None:
@@ -1189,13 +1187,7 @@ class FlashAttentionBackend(AttentionBackend):
         if sinks is not None:
             kwargs["sinks"] = sinks
 
-        flash_attn_with_kvcache_base = flash_attn_with_kvcache_fa3
-
-        flash_attn_with_kvcache = (
-            flash_attn_with_kvcache_fa4
-            if self.fa_impl_ver == 4
-            else flash_attn_with_kvcache_base
-        )
+        flash_attn_with_kvcache = self.flash_attn_with_kvcache
 
         k_descale, v_descale = None, None
         # only use kv scaling if: 1) fp8 kv is explicitly enabled, 2) RadixAttention
