@@ -825,6 +825,28 @@ class ModelRunnerKVCacheMixin:
         page_size = self.server_args.page_size
         capacity = capacity // page_size * page_size
 
+        # CK batch prefill kernel uses int32 offsets for page_size < kN0 (128).
+        # Cap token capacity so (num_pages * page_stride) fits in int32.
+        CK_KN0 = 128
+        if (
+            self.server_args.attention_backend == "aiter"
+            and page_size < CK_KN0
+        ):
+            num_kv_heads = self.model_config.get_num_kv_heads(
+                get_attention_tp_size()
+            )
+            head_dim = self.model_config.head_dim
+            page_stride = page_size * num_kv_heads * head_dim
+            max_safe_tokens = ((2**31 - 1) // page_stride) * page_size
+            if capacity > max_safe_tokens:
+                logging.warning(
+                    f"Capping max_total_tokens from {capacity} to {max_safe_tokens} "
+                    f"to avoid int32 overflow in CK batch prefill kernel "
+                    f"(page_size={page_size} < kN0={CK_KN0}). "
+                    f"Use --page-size 128 or larger to remove this limit."
+                )
+                capacity = max_safe_tokens
+
         # Sync across PP ranks (each may have different layer counts)
         if self.pp_size > 1:
             tensor = torch.tensor(capacity, dtype=torch.int64)
